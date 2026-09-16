@@ -140,4 +140,5 @@ for Docker + Supabase details.
 
 ## License
 
-Not specified.
+[MIT](LICENSE) — © 2026 clydedom-shopify. Bundled third-party components retain
+their own licenses (e.g. the Ghost skill under BSD-3-Clause).
