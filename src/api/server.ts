@@ -6,6 +6,7 @@ import type { Repository } from "../domain/repository.ts";
 import type { ToolRegistry } from "../tools/registry.ts";
 import type { ToolContext } from "../tools/provider.ts";
 import type { Logger } from "../lib/logger.ts";
+import { SlidingWindowRateLimiter } from "./rateLimit.ts";
 
 /**
  * HTTP API for the agent. Everything here is a thin, validated adapter over the
@@ -62,20 +63,47 @@ export interface ApiDeps {
   apiAuthToken: string;
   /** Human label for /health ("postgres" | "memory"). */
   persistence: string;
+  /** Per-IP requests allowed per window before a 429; default 120/60s. */
+  apiRateLimitMax?: number;
+  /** Rolling window for the rate limit; default 60_000ms. */
+  apiRateLimitWindowMs?: number;
+  /** Trust X-Forwarded-For (ONLY behind a reverse proxy); default false. */
+  trustProxy?: boolean;
 }
 
 const zErrorDetail = (err: z.ZodError): string =>
   err.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; ");
 
+/** Security headers on every response — the API only ever sends JSON. */
+const SECURITY_HEADERS: Record<string, string> = {
+  "x-content-type-options": "nosniff",
+  "x-frame-options": "DENY",
+  "referrer-policy": "no-referrer",
+  "content-security-policy": "default-src 'none'",
+  "x-xss-protection": "0",
+};
+
 export function buildApiServer(deps: ApiDeps): FastifyInstance {
-  const app = Fastify({ logger: false });
+  const limiter = new SlidingWindowRateLimiter(deps.apiRateLimitMax ?? 120, deps.apiRateLimitWindowMs ?? 60_000);
+  const app = Fastify({ logger: false, trustProxy: deps.trustProxy ?? false });
 
   app.addHook("onRequest", async (req, reply) => {
-    if (req.method === "GET" && req.url === "/health") return;
+    if (req.method === "GET" && req.url === "/health") return; // liveness stays open
+    // Rate limit first: a saturated client is rejected before it touches auth.
+    const verdict = limiter.allow(req.ip);
+    if (!verdict.allowed) {
+      reply.header("retry-after", String(verdict.retryAfterSeconds));
+      return reply.code(429).send({ error: "rate_limited", retryAfterSeconds: verdict.retryAfterSeconds });
+    }
     const expected = `Bearer ${deps.apiAuthToken}`;
     if (req.headers.authorization !== expected) {
       return reply.code(401).send({ error: "unauthorized" });
     }
+  });
+
+  app.addHook("onSend", async (_req, reply, payload) => {
+    for (const [name, value] of Object.entries(SECURITY_HEADERS)) reply.header(name, value);
+    return payload;
   });
 
   const enqueueRoute = (

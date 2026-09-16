@@ -25,6 +25,9 @@ describe("config/env", () => {
     expect(env.SHOPIFY_STORE).toBeUndefined();
     expect(env.SHOPIFY_ACCESS_TOKEN).toBeUndefined();
     expect(env.SHOPIFY_API_VERSION).toBeUndefined();
+    expect(env.API_RATE_LIMIT_MAX).toBe(120);
+    expect(env.API_RATE_LIMIT_WINDOW_MS).toBe(60_000);
+    expect(env.API_TRUST_PROXY).toBe("false");
   });
 
   it("accepts n8n callback modes and validates the http mode", () => {
@@ -118,5 +121,14 @@ describe("config/env", () => {
   it("allows forcing memory or postgres explicitly", () => {
     expect(persistenceMode(parseEnv({ PERSISTENCE: "memory", DATABASE_URL: "postgres://u:p@h/db" }))).toBe("memory");
     expect(persistenceMode(parseEnv({ PERSISTENCE: "postgres" }))).toBe("postgres");
+  });
+
+  it("parses the API hardening knobs and rejects a sloppy trust flag", () => {
+    const env = parseEnv({ API_RATE_LIMIT_MAX: "50", API_RATE_LIMIT_WINDOW_MS: "5000", API_TRUST_PROXY: "true" });
+    expect(env.API_RATE_LIMIT_MAX).toBe(50);
+    expect(env.API_RATE_LIMIT_WINDOW_MS).toBe(5_000);
+    expect(env.API_TRUST_PROXY).toBe("true");
+    // A non-boolean trust flag is a misconfiguration, not a silent guess.
+    expect(() => parseEnv({ API_TRUST_PROXY: "yes" })).toThrow();
   });
 });

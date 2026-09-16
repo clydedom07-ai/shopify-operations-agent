@@ -58,6 +58,13 @@ const envSchema = z.object({
   // REST_BASE_URL and sets the guard.
   REST_MODE: z.enum(["off", "mock", "http"]).default("off"),
   REST_BASE_URL: z.string().optional(),
+  // HTTP API hardening. Rate limit is per client IP (in-memory sliding window,
+  // single process). API_TRUST_PROXY must only be "true" when the server sits
+  // behind a reverse proxy that forwards X-Forwarded-For — with it false, the
+  // limiter keys on the direct socket address, which is the safe default.
+  API_RATE_LIMIT_MAX: z.coerce.number().int().min(1).default(120),
+  API_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1000).default(60_000),
+  API_TRUST_PROXY: z.enum(["true", "false"]).default("false"),
 });
 export type Env = z.infer<typeof envSchema>;
 

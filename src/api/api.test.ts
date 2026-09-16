@@ -16,7 +16,7 @@ import { buildApiServer } from "./server.ts";
 const logger = createLogger("silent");
 const TOKEN = "test-token";
 
-function makeApi() {
+function makeApi(opts: { rateLimitMax?: number; rateLimitWindowMs?: number; trustProxy?: boolean } = {}) {
   const repo = new InMemoryRepository();
   const registry = new ToolRegistry(logger, new PermissionResolver())
     .register(new ShopifyToolProvider(new MockShopifyClient()))
@@ -25,7 +25,16 @@ function makeApi() {
     .register(new BusinessToolProvider());
   const gateway = new ScriptedLlmGateway(logger);
   const runner = new AgentTaskRunner({ registry, gateway, repo, logger }, logger, { claimIntervalMs: 5 });
-  const app = buildApiServer({ repo, registry, logger, apiAuthToken: TOKEN, persistence: "memory" });
+  const app = buildApiServer({
+    repo,
+    registry,
+    logger,
+    apiAuthToken: TOKEN,
+    persistence: "memory",
+    apiRateLimitMax: opts.rateLimitMax,
+    apiRateLimitWindowMs: opts.rateLimitWindowMs,
+    trustProxy: opts.trustProxy,
+  });
   const auth = { authorization: `Bearer ${TOKEN}` };
   const drain = async () => runner.drainPending();
   return { app, repo, runner, auth, drain };
@@ -255,5 +264,47 @@ describe("api — human-in-the-loop approvals", () => {
       payload: { decision: "approved" },
     });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+describe("api — hardening (rate limit + security headers)", () => {
+  it("rate-limits per client IP with a 429 and Retry-After, leaving others alone", async () => {
+    const { app, auth } = makeApi({ rateLimitMax: 2, rateLimitWindowMs: 60_000 });
+    const hit = (remoteAddress: string) =>
+      app.inject({ method: "GET", url: "/agent/tasks/nope", headers: auth, remoteAddress });
+    expect((await hit("1.1.1.1")).statusCode).toBe(404); // allowed — the route answered
+    expect((await hit("1.1.1.1")).statusCode).toBe(404);
+    const blocked = await hit("1.1.1.1");
+    expect(blocked.statusCode).toBe(429);
+    expect(blocked.json()).toMatchObject({ error: "rate_limited" });
+    expect(blocked.headers["retry-after"]).toBeTruthy();
+    // A different IP is tracked independently and still reaches the route.
+    expect((await hit("2.2.2.2")).statusCode).toBe(404);
+  });
+
+  it("never rate-limits /health — liveness stays open under load", async () => {
+    const { app } = makeApi({ rateLimitMax: 1, rateLimitWindowMs: 60_000 });
+    expect((await app.inject({ method: "GET", url: "/health" })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/health" })).statusCode).toBe(200);
+  });
+
+  it("sets the security headers on every response", async () => {
+    const { app, auth } = makeApi();
+    const res = await app.inject({ method: "POST", url: "/agent/run", headers: auth, payload: { text: "hi" } });
+    expect(res.statusCode).toBe(201);
+    expect(res.headers["x-content-type-options"]).toBe("nosniff");
+    expect(res.headers["x-frame-options"]).toBe("DENY");
+    expect(res.headers["referrer-policy"]).toBe("no-referrer");
+    expect(res.headers["content-security-policy"]).toBe("default-src 'none'");
+  });
+
+  it("keys the rate limit by the forwarded IP only when trustProxy is on", async () => {
+    const { app, auth } = makeApi({ rateLimitMax: 1, rateLimitWindowMs: 60_000, trustProxy: true });
+    const forwarded = (ip: string, remoteAddress: string) =>
+      app.inject({ method: "GET", url: "/agent/tasks/nope", headers: { ...auth, "x-forwarded-for": ip }, remoteAddress });
+    // Two different forwarded clients behind one proxy socket are tracked apart.
+    expect((await forwarded("9.9.9.9", "10.0.0.1")).statusCode).toBe(404);
+    expect((await forwarded("8.8.8.8", "10.0.0.1")).statusCode).toBe(404);
+    expect((await forwarded("9.9.9.9", "10.0.0.1")).statusCode).toBe(429);
   });
 });

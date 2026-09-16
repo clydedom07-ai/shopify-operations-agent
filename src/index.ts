@@ -158,7 +158,16 @@ if (env.SLACK_INGESTION === "mock") {
   slackTimer = setInterval(() => void tick(), env.SLACK_POLL_INTERVAL_MS);
 }
 
-const app = buildApiServer({ repo, registry, logger, apiAuthToken: env.API_AUTH_TOKEN, persistence });
+const app = buildApiServer({
+  repo,
+  registry,
+  logger,
+  apiAuthToken: env.API_AUTH_TOKEN,
+  persistence,
+  apiRateLimitMax: env.API_RATE_LIMIT_MAX,
+  apiRateLimitWindowMs: env.API_RATE_LIMIT_WINDOW_MS,
+  trustProxy: env.API_TRUST_PROXY === "true",
+});
 const pendingTasks = await repo.listTasks({ status: "pending" });
 logger.info(
   {
@@ -173,6 +182,8 @@ logger.info(
     n8nCallback: env.N8N_CALLBACK,
     rest: env.REST_MODE,
     shopify: env.SHOPIFY_MODE,
+    apiRateLimitMax: env.API_RATE_LIMIT_MAX,
+    trustProxy: env.API_TRUST_PROXY,
   },
   "Shopify Operations Agent booted",
 );

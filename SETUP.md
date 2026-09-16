@@ -55,6 +55,9 @@ agent.
 | `PORT` | `3000` | | HTTP API port |
 | `LOG_LEVEL` | `info` | pino levels | `silent` is supported and used in tests |
 | `API_AUTH_TOKEN` | `local-dev-token` | | Required as `Authorization: Bearer <token>` on every route except `GET /health` |
+| `API_RATE_LIMIT_MAX` | `120` | integer ≥ 1 | Per-client-IP requests allowed per rolling window |
+| `API_RATE_LIMIT_WINDOW_MS` | `60000` | integer ≥ 1000 | Rate-limit window; overflow answers `429` + `Retry-After` |
+| `API_TRUST_PROXY` | `false` | `true` / `false` | `true` only behind a reverse proxy forwarding `X-Forwarded-For` |
 | `PERSISTENCE` | `memory` | `memory` / `auto` / `postgres` | `auto` → Postgres only if `DATABASE_URL` is set |
 | `DATABASE_URL` | — | | Postgres URL; Supabase URLs (`sslmode=require`) work with TLS enabled |
 | `ANTHROPIC_API_KEY` | — | | Set to use the real Claude gateway (`claude-opus-5` adaptive-thinking, streaming) |
@@ -135,6 +138,15 @@ single process. `SIGINT`/`SIGTERM` shut it down cleanly.
 ## 6. HTTP API reference
 
 All routes require `Authorization: Bearer <API_AUTH_TOKEN>` except `GET /health`.
+
+The API is rate-limited per client IP by default (120 requests / rolling
+60s — configure via `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW_MS`); a
+saturated client gets `429 {"error":"rate_limited",…}` with a `Retry-After`
+header, and `/health` is never rate-limited. Every response carries security
+headers (`nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, a
+`default-src 'none'` CSP, and `X-XSS-Protection: 0`). Behind a reverse proxy,
+set `API_TRUST_PROXY=true` so the limiter keys on the forwarded client rather
+than the proxy socket — leave it false otherwise.
 
 | Method & path | Purpose |
 | --- | --- |
@@ -348,7 +360,7 @@ backends never touches the agent, the tools, or their tests.
 
 ```sh
 pnpm typecheck     # tsc --noEmit
-pnpm test          # vitest run (119 tests, all hermetic, no network/PG)
+pnpm test          # vitest run (128 tests, all hermetic, no network/PG)
 pnpm test:watch
 ```
 
@@ -375,6 +387,7 @@ passes with zero credentials and no database:
 | REST write — `rest_write` approval-tier, refused without a recorded human approval | ✅ |
 | REST origin guard — a path escaping the base origin is refused, never fetched | ✅ |
 | Real Shopify client — auth header on every call, snake→camel mapping, note PUT, honest `null`/`[]`/throw on failure, timeout abort | ✅ |
+| API hardening — 429 past the per-IP window, `/health` exempt, security headers, proxy trust | ✅ |
 
 ## 13. Deployment
 
@@ -474,3 +487,5 @@ Key invariants guard the "production shape":
 4. **Generic REST** ✅ (`rest_get` auto, `rest_write` approval; `mock`/`http` against one base origin)
 5. **Real Shopify Admin API client** ✅ (same seven tools on the live REST API — `mock` default, `http` opt-in)
 6. **Deployment shape** ✅ (multi-stage `Dockerfile`, `.dockerignore`; Docker + Supabase run docs)
+7. **GitHub Actions CI** ✅ (typecheck + tests + `docker build` on push/PR; secret scanning + push protection on)
+8. **API hardening** ✅ (per-IP sliding-window rate limit, security headers, proxy trust)
