@@ -15,6 +15,7 @@ Current integration status:
 | n8n callback (post-completion webhook + workflow trigger tool) | ✅ Done |
 | Slack (inbound messages → tasks; auto ack on the channel) | ✅ Done |
 | Generic REST (reads auto, writes approval, one base origin) | ✅ Done |
+| Deployment shape (Docker image, Supabase-ready Postgres) | ✅ Done |
 
 There is no build step — the project runs TypeScript directly on Node's native
 type-stripping. Clone, install, configure, run.
@@ -375,7 +376,60 @@ passes with zero credentials and no database:
 | REST origin guard — a path escaping the base origin is refused, never fetched | ✅ |
 | Real Shopify client — auth header on every call, snake→camel mapping, note PUT, honest `null`/`[]`/throw on failure, timeout abort | ✅ |
 
-## 13. Architecture at a glance
+## 13. Deployment
+
+The agent is a single stateless Node 24 process — all durable state lives in
+Postgres (memory is a dev default that still shuts down cleanly), so the
+container is safe to stop, redeploy, and scale to zero. There is **no build
+step**: Node's native TS type-stripping runs `src/index.ts` directly.
+
+### Docker
+
+```sh
+docker build -t shopify-ops-agent .
+docker run --rm -p 3000:3000 -e PERSISTENCE=memory shopify-ops-agent
+```
+
+The image bakes in `HOST=0.0.0.0` (reachable from the host network) and runs as
+the non-root `node` user. **No `.env` and no secrets ship in the image** —
+configure via `-e`, compose, or the orchestrator's secret store.
+`--env-file-if-exists=.env` tolerates a mounted `.env` for local runs and
+ignores a missing one in production. The default command also auto-runs
+migrations at boot.
+
+A Postgres-backed run (against local compose Postgres):
+
+```sh
+docker run --rm -p 3000:3000 \
+  -e PERSISTENCE=postgres \
+  -e DATABASE_URL=postgres://agent:agent@host.docker.internal:5432/agent \
+  shopify-ops-agent
+```
+
+### Supabase
+
+Supabase is just a `DATABASE_URL` — TLS turns on automatically when the URL
+carries `sslmode=require` (`src/db/pool.ts`). Two connection shapes:
+
+```sh
+# Direct connection (IPv4/IPv6 — some hosts can't reach Supabase's IPv6 direct host)
+DATABASE_URL=postgres://postgres.<project-ref>:<password>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require
+
+# Supabase pooler — transaction mode, works from IPv4-only hosts
+DATABASE_URL=postgres://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres?sslmode=require
+
+PERSISTENCE=postgres
+```
+
+First boot runs the forward-only migrations against Supabase
+(`src/db/migrations/*.sql`, tracked in `schema_migrations`) — durable tasks,
+approvals, issues, and the audit trail all live in the database. Because state
+is shared, the same worker can run from Kubernetes, Fly.io, a cron host, or a
+laptop; tasks are claimed atomically (`FOR UPDATE SKIP LOCKED` in
+`claimNextTask`), so even a second replica picks up the next pending task
+without double-processing.
+
+## 14. Architecture at a glance
 
 ```
 HTTP API (Fastify) ──┬──> Repository (InMemory | Postgres)
@@ -412,10 +466,11 @@ Key invariants guard the "production shape":
 - **Never-invent is structural** — the scripted gateway only quotes facts from
   tool results; the n8n payload comes from persisted records, not the model.
 
-## 14. Integration roadmap (current order)
+## 15. Integration roadmap (current order)
 
 1. **Email ingestion** ✅ (`customer` + `supplier` via mock provider)
 2. **n8n callback** ✅ (post-completion webhook + workflow trigger tool)
 3. **Slack** ✅ (inbound messages → tasks; conservative auto-ack via `slack_postMessage`)
 4. **Generic REST** ✅ (`rest_get` auto, `rest_write` approval; `mock`/`http` against one base origin)
 5. **Real Shopify Admin API client** ✅ (same seven tools on the live REST API — `mock` default, `http` opt-in)
+6. **Deployment shape** ✅ (multi-stage `Dockerfile`, `.dockerignore`; Docker + Supabase run docs)
