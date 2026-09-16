@@ -13,6 +13,8 @@ import type {
  * touching the agent, the tools, or their tests.
  */
 export interface ShopifyAdminClient {
+  /** Which backend this client is — lets callers/tools label it honestly. */
+  readonly id: "mock" | "http";
   searchOrders(filter: OrderFilter): Promise<Order[]>;
   getOrder(id: string): Promise<Order | null>;
   getCustomer(ref: { id?: string; email?: string }): Promise<Customer | null>;

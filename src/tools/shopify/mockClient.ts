@@ -11,6 +11,7 @@ import type { ShopifyAdminClient } from "./client.ts";
 
 /** Deterministic fixture store — no network, no credentials. */
 export class MockShopifyClient implements ShopifyAdminClient {
+  readonly id = "mock" as const;
   private readonly orders = new Map<string, Order>();
   private readonly customers = new Map<string, Customer>();
   private readonly products = new Map<string, Product>();

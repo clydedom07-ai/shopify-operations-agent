@@ -6,7 +6,9 @@ import { InMemoryRepository } from "./db/inMemoryRepository.ts";
 import { PgRepository } from "./db/pgRepository.ts";
 import { PermissionResolver } from "./domain/permissions.ts";
 import { MockShopifyClient } from "./tools/shopify/mockClient.ts";
+import { HttpShopifyClient } from "./tools/shopify/httpClient.ts";
 import { ShopifyToolProvider } from "./tools/shopify/provider.ts";
+import type { ShopifyAdminClient } from "./tools/shopify/client.ts";
 import { InternalToolProvider } from "./tools/internal/provider.ts";
 import { BusinessToolProvider } from "./tools/business/provider.ts";
 import { SupplierToolProvider } from "./tools/supplier/provider.ts";
@@ -72,8 +74,15 @@ const restClient: RestClient | null =
       ? new MockRestClient()
       : null;
 
+// Shopify is core: mock by default (zero credentials), swapped for a live
+// Admin API client when SHOPIFY_MODE=http is fully configured.
+const shopifyClient: ShopifyAdminClient =
+  env.SHOPIFY_MODE === "http" && env.SHOPIFY_STORE && env.SHOPIFY_ACCESS_TOKEN
+    ? new HttpShopifyClient(env.SHOPIFY_STORE, env.SHOPIFY_ACCESS_TOKEN, env.SHOPIFY_API_VERSION)
+    : new MockShopifyClient();
+
 const registry = new ToolRegistry(logger, new PermissionResolver())
-  .register(new ShopifyToolProvider(new MockShopifyClient()))
+  .register(new ShopifyToolProvider(shopifyClient))
   .register(new SupplierToolProvider(new MockSupplierDirectory()))
   .register(new InternalToolProvider())
   .register(new BusinessToolProvider());
@@ -163,6 +172,7 @@ logger.info(
     slackIngestion: env.SLACK_INGESTION,
     n8nCallback: env.N8N_CALLBACK,
     rest: env.REST_MODE,
+    shopify: env.SHOPIFY_MODE,
   },
   "Shopify Operations Agent booted",
 );

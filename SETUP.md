@@ -10,6 +10,7 @@ Current integration status:
 | Integration | Status |
 | --- | --- |
 | Shopify read/investigate + deterministic permission tiers | ✅ Done |
+| Real Shopify Admin API client (`mock` default, live `http` opt-in) | ✅ Done |
 | Email ingestion (customer + supplier) | ✅ Done |
 | n8n callback (post-completion webhook + workflow trigger tool) | ✅ Done |
 | Slack (inbound messages → tasks; auto ack on the channel) | ✅ Done |
@@ -68,6 +69,10 @@ agent.
 | `SLACK_POLL_INTERVAL_MS` | `60000` | integer ≥ 1000 | |
 | `REST_MODE` | `off` | `off` / `mock` / `http` | Generic outbound REST; `mock` answers from a route table, `http` fetches the base origin |
 | `REST_BASE_URL` | — | | **Required** when `REST_MODE=http`; startup fails otherwise. The agent can only ever reach this one origin |
+| `SHOPIFY_MODE` | `mock` | `off` / `mock` / `http` | Core backend. `off` registers no Shopify tools; `mock` (default) answers from fixture data with zero credentials; `http` talks to a store's Admin API |
+| `SHOPIFY_STORE` | — | | Store hostname (e.g. `your-store.myshopify.com`) or full `https://` URL; **required** when `SHOPIFY_MODE=http` |
+| `SHOPIFY_ACCESS_TOKEN` | — | | Shopify Admin API access token — starts `shpat_`, custom apps only; **required** when `SHOPIFY_MODE=http` |
+| `SHOPIFY_API_VERSION` | `2024-10` | date-stamped release | Admin REST version pinned at boot; pin the current release for your store |
 
 ### LLM gateways
 
@@ -301,11 +306,48 @@ touching the agent core. Deliberately lean: one origin, two tools, **no** SOP
 changes — REST stays a capability the agent can call, not a new behavior to
 learn.
 
-## 11. Tests
+## 11. Real Shopify Admin API (http mode)
+
+`SHOPIFY_MODE` defaults to **`mock`** — the fixture store (`ord_1001`–`ord_1006`,
+the same orders every acceptance scenario runs against) needs zero credentials
+and no network. Point the agent at a real store:
+
+```
+SHOPIFY_MODE=http
+SHOPIFY_STORE=your-store.myshopify.com
+SHOPIFY_ACCESS_TOKEN=shpat_xxxxxxxxxxxx
+SHOPIFY_API_VERSION=2024-10        # pin your store's current REST release
+```
+
+The **live client** (`HttpShopifyClient`) talks to the Admin REST API on every
+tool call: same seven tools, same permission tiers, same agent core — only the
+backend differs. Each request:
+
+- sends `x-shopify-access-token` on the versioned base
+  (`https://<store>/admin/api/<version>`);
+- maps the API's snake_case JSON into the camelCase domain shapes the agent
+  already consumes (order notes `"a\nb"` back to array, product tags
+  `"apparel, winter"` to array, ids to strings);
+- obeys a 5s timeout per request.
+
+**Failure discipline — never invent.** A read that errors, times out, or
+returns non-2xx answers `null` / `[]` — an honest "nothing found", never a
+fabricated order. `addOrderNote` is the one write: it reads the current notes,
+appends, and PUTs them back, **throwing** on failure so the registry audits it
+as an errored tool call. Two honest Admin-API limits: a fulfillment id alone
+can't be resolved (no global fulfillments endpoint → `[]`), and SKU search
+scans the first 250 products → `null` when absent. A 404 for an unknown id is
+"unknown", never a crash.
+
+The client sits behind the same `ShopifyAdminClient` interface as the mock, so
+the label reports the truth (`Shopify (mock)` vs `Shopify (http)`) and swapping
+backends never touches the agent, the tools, or their tests.
+
+## 12. Tests
 
 ```sh
 pnpm typecheck     # tsc --noEmit
-pnpm test          # vitest run (106 tests, all hermetic, no network/PG)
+pnpm test          # vitest run (119 tests, all hermetic, no network/PG)
 pnpm test:watch
 ```
 
@@ -331,8 +373,9 @@ passes with zero credentials and no database:
 | REST read — `rest_get` auto, honest resource on 2xx / honest failure on 5xx | ✅ |
 | REST write — `rest_write` approval-tier, refused without a recorded human approval | ✅ |
 | REST origin guard — a path escaping the base origin is refused, never fetched | ✅ |
+| Real Shopify client — auth header on every call, snake→camel mapping, note PUT, honest `null`/`[]`/throw on failure, timeout abort | ✅ |
 
-## 12. Architecture at a glance
+## 13. Architecture at a glance
 
 ```
 HTTP API (Fastify) ──┬──> Repository (InMemory | Postgres)
@@ -355,7 +398,8 @@ Slack poller ──> ingestSlack   ──> events + tasks ─┴──> onTaskCo
 
 Key invariants guard the "production shape":
 
-- **Domain tools are interfaces** — `MockShopifyClient`/`MockSupplierDirectory`/
+- **Domain tools are interfaces** — `MockShopifyClient`/`HttpShopifyClient`/
+  `MockSupplierDirectory`/
   `MockEmailProvider`/`MockN8nWebhookClient`/`MockSlackProvider`+
   `MockSlackNotifier`/`MockRestClient`/`HttpRestClient`/`RestToolProvider`
   stand in for real integrations; swapping in real ones never touches the
@@ -368,9 +412,10 @@ Key invariants guard the "production shape":
 - **Never-invent is structural** — the scripted gateway only quotes facts from
   tool results; the n8n payload comes from persisted records, not the model.
 
-## 13. Integration roadmap (current order)
+## 14. Integration roadmap (current order)
 
 1. **Email ingestion** ✅ (`customer` + `supplier` via mock provider)
 2. **n8n callback** ✅ (post-completion webhook + workflow trigger tool)
 3. **Slack** ✅ (inbound messages → tasks; conservative auto-ack via `slack_postMessage`)
 4. **Generic REST** ✅ (`rest_get` auto, `rest_write` approval; `mock`/`http` against one base origin)
+5. **Real Shopify Admin API client** ✅ (same seven tools on the live REST API — `mock` default, `http` opt-in)

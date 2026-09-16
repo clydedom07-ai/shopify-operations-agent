@@ -57,7 +57,9 @@ export type TrackingEventStatus =
   | "shipped"
   | "in_transit"
   | "out_for_delivery"
+  | "attempted_delivery"
   | "delivered"
+  | "failure"
   | "exception"
   | "returned";
 

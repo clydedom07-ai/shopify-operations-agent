@@ -37,12 +37,17 @@ const addNote = z.object({
  */
 export class ShopifyToolProvider implements ToolProvider {
   readonly id = "shopify";
-  readonly label = "Shopify (mock)";
 
   private readonly client: ShopifyAdminClient;
 
   constructor(client: ShopifyAdminClient) {
     this.client = client;
+  }
+
+  /** Names the live backend so the label is never a claim the deployment
+   *  doesn't make ("Shopify (mock)" vs "Shopify (http)"). */
+  get label(): string {
+    return `Shopify (${this.client.id})`;
   }
 
   listTools(): ToolDefinition[] {

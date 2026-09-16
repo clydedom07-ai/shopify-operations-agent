@@ -43,6 +43,14 @@ const envSchema = z.object({
   SLACK_CHANNEL: z.string().min(1).max(120).default("#ops"),
   SLACK_INGESTION: z.enum(["off", "mock"]).default("off"),
   SLACK_POLL_INTERVAL_MS: z.coerce.number().int().min(1000).default(60_000),
+  // Shopify. CORE backend, so it defaults to the deterministic mock (the agent
+  // runs with zero credentials). `http` talks to a store's Admin API and
+  // requires the store + access token; SHOPIFY_API_VERSION defaults to a
+  // documented stable release, but operators should pin the current one.
+  SHOPIFY_MODE: z.enum(["off", "mock", "http"]).default("mock"),
+  SHOPIFY_STORE: z.string().optional(),
+  SHOPIFY_ACCESS_TOKEN: z.string().optional(),
+  SHOPIFY_API_VERSION: z.string().optional(),
   // Generic outbound REST. OFF by default: the agent may reach ONE
   // operator-configured base origin (`REST_BASE_URL`), read via the auto-tier
   // `rest_get` tool and write via the approval-tier `rest_write`. `mock`
@@ -63,6 +71,9 @@ export function parseEnv(env: NodeJS.ProcessEnv = process.env): Env {
   }
   if (parsed.REST_MODE === "http" && !parsed.REST_BASE_URL) {
     throw new Error("REST_MODE=http requires REST_BASE_URL");
+  }
+  if (parsed.SHOPIFY_MODE === "http" && (!parsed.SHOPIFY_STORE || !parsed.SHOPIFY_ACCESS_TOKEN)) {
+    throw new Error("SHOPIFY_MODE=http requires SHOPIFY_STORE and SHOPIFY_ACCESS_TOKEN");
   }
   return parsed;
 }

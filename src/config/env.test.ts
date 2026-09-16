@@ -21,6 +21,10 @@ describe("config/env", () => {
     expect(env.SLACK_POLL_INTERVAL_MS).toBe(60_000);
     expect(env.REST_MODE).toBe("off");
     expect(env.REST_BASE_URL).toBeUndefined();
+    expect(env.SHOPIFY_MODE).toBe("mock");
+    expect(env.SHOPIFY_STORE).toBeUndefined();
+    expect(env.SHOPIFY_ACCESS_TOKEN).toBeUndefined();
+    expect(env.SHOPIFY_API_VERSION).toBeUndefined();
   });
 
   it("accepts n8n callback modes and validates the http mode", () => {
@@ -55,6 +59,25 @@ describe("config/env", () => {
     // http without a base URL is a misconfiguration, not a silent no-op.
     expect(() => parseEnv({ REST_MODE: "http" })).toThrow(/REST_BASE_URL/);
     expect(() => parseEnv({ REST_MODE: "slack" })).toThrow();
+  });
+
+  it("parses the Shopify backend and validates the http mode", () => {
+    // OFF and mock are silent no-credentials modes.
+    expect(parseEnv({ SHOPIFY_MODE: "off" }).SHOPIFY_MODE).toBe("off");
+    expect(parseEnv({ SHOPIFY_MODE: "mock", SHOPIFY_STORE: "x.myshopify.com" }).SHOPIFY_MODE).toBe("mock");
+    // http requires both the store and the access token — either alone is a
+    // misconfiguration, not a silent fallback to the mock.
+    expect(
+      parseEnv({
+        SHOPIFY_MODE: "http",
+        SHOPIFY_STORE: "your-store.myshopify.com",
+        SHOPIFY_ACCESS_TOKEN: "shpat_abc",
+        SHOPIFY_API_VERSION: "2024-10",
+      }).SHOPIFY_API_VERSION,
+    ).toBe("2024-10");
+    expect(() => parseEnv({ SHOPIFY_MODE: "http" })).toThrow(/SHOPIFY_STORE/);
+    expect(() => parseEnv({ SHOPIFY_MODE: "http", SHOPIFY_STORE: "x.myshopify.com" })).toThrow(/SHOPIFY_ACCESS_TOKEN/);
+    expect(() => parseEnv({ SHOPIFY_MODE: "carrier" })).toThrow();
   });
 
   it("accepts an ANTHROPIC_API_KEY and passes the model through", () => {
